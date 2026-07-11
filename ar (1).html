@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>เกม AR ชกลูกโป่งชนิดของวัสดุ</title>
+    
+    <!-- Tailwind CSS สำหรับจัด Layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe สำหรับระบบ AR ตรวจจับมือ -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <!-- Canvas Confetti สำหรับเอฟเฟกต์ตอนตอบถูกและตอนลูกโป่งแตก -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        /* ฟอนต์ภาษาไทย */
+        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800;900&display=swap');
+        
+        body {
+            font-family: 'Kanit', sans-serif;
+            background-color: #f0fdf4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        /* คอนเทนเนอร์หลัก 16:9 */
+        #game-container {
+            width: 100vw;
+            max-width: 1200px;
+            aspect-ratio: 16 / 9;
+            position: relative;
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            overflow: hidden;
+            border: 8px solid white;
+        }
+
+        /* ลวดลายวิ้งๆ พื้นหลัง */
+        .bg-pattern {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: 
+                radial-gradient(circle at 20% 30%, rgba(255,255,255,0.4) 2px, transparent 3px),
+                radial-gradient(circle at 70% 60%, rgba(255,255,255,0.4) 3px, transparent 4px),
+                radial-gradient(circle at 40% 80%, rgba(255,255,255,0.4) 2px, transparent 3px),
+                radial-gradient(circle at 80% 20%, rgba(255,255,255,0.4) 4px, transparent 5px);
+            z-index: 0;
+        }
+
+        #webcam {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            opacity: 0.45; /* ปรับให้สว่างขึ้นนิดนึง วิดีโอจะได้ซอฟต์ๆ */
+            z-index: 1;
+            border-radius: 16px;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        /* คอนเทนเนอร์ลูกโป่ง */
+        .balloon-container {
+            position: absolute;
+            bottom: -160px;
+            width: 100px;
+            height: 140px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s;
+        }
+
+        /* ลูกโป่ง 3D สุดว้าว */
+        .balloon {
+            position: relative;
+            width: 90px;
+            height: 110px;
+            border-radius: 50% 50% 50% 50% / 40% 40% 60% 60%;
+            box-shadow: inset -10px -10px 15px rgba(0,0,0,0.15), 
+                        inset 10px 10px 15px rgba(255,255,255,0.4),
+                        0 8px 15px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            font-weight: 900;
+            color: white;
+            font-size: 1.3rem;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.4);
+            pointer-events: none;
+        }
+
+        /* แสงสะท้อนวาวๆ บนลูกโป่ง (Glossy highlight) */
+        .balloon::before {
+            content: "";
+            position: absolute;
+            top: 10px;
+            left: 15px;
+            width: 20px;
+            height: 35px;
+            background: rgba(255,255,255,0.5);
+            border-radius: 50%;
+            transform: rotate(25deg);
+            pointer-events: none;
+        }
+
+        /* จุกลูกโป่งด้านล่าง */
+        .balloon-knot {
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 8px solid transparent;
+            border-right: 8px solid transparent;
+            border-bottom: 12px solid inherit;
+            filter: brightness(0.85);
+            pointer-events: none;
+        }
+
+        /* เชือกลูกโป่งแบบพริ้วๆ */
+        .balloon-string {
+            position: absolute;
+            bottom: -45px;
+            left: 50%;
+            width: 2px;
+            height: 40px;
+            background-color: rgba(255,255,255,0.8);
+            pointer-events: none;
+            /* ทำให้เชือกดูหยักนิดๆ */
+            border-radius: 50%;
+        }
+
+        @keyframes floatUp {
+            0% { transform: translateY(0) rotate(-3deg); }
+            50% { transform: translateY(-65vh) rotate(3deg); }
+            100% { transform: translateY(-130vh) rotate(-3deg); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0) scale(1.1); }
+            20%, 60% { transform: translateX(-12px) rotate(-10deg) scale(1.1); }
+            40%, 80% { transform: translateX(12px) rotate(10deg) scale(1.1); }
+        }
+        .shake { animation: shake 0.4s ease-in-out; }
+
+        /* เอฟเฟกต์เด้งดุ๊กดิ๊กสำหรับไอคอนคำถาม */
+        @keyframes bounceEmoji {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-15px) scale(1.1); }
+        }
+        .bounce-anim { animation: bounceEmoji 2s infinite ease-in-out; }
+
+        /* เคอร์เซอร์มือ AR มีแสงเรืองรอง */
+        #hand-cursor {
+            position: absolute;
+            font-size: 4.5rem;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+            pointer-events: none;
+            display: none;
+            filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.8)) drop-shadow(2px 4px 6px rgba(0,0,0,0.3));
+            transition: top 0.05s ease-out, left 0.05s ease-out; /* เพิ่มความสมูทนิดนึง */
+        }
+
+        /* ข้อความแจ้งเตือนกลางจออลังการขึ้น */
+        #feedback-msg {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(0.5);
+            font-size: 4rem;
+            font-weight: 900;
+            text-shadow: 3px 3px 0 #fff, -3px -3px 0 #fff, 3px -3px 0 #fff, -3px 3px 0 #fff, 0 10px 15px rgba(0,0,0,0.2);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 40;
+            pointer-events: none;
+        }
+        .show-feedback {
+            transform: translate(-50%, -50%) scale(1) !important;
+            opacity: 1 !important;
+        }
+
+        .overlay-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.7);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(10px); /* เบลอพื้นหลังให้ดูพรีเมียม */
+        }
+
+        .emoji-img { font-size: 7rem; line-height: 1; filter: drop-shadow(0 10px 10px rgba(0,0,0,0.1)); }
+        
+        /* สไตล์กล่องคำถาม */
+        .question-box {
+            background: rgba(255, 255, 255, 0.95);
+            border: 5px solid #fcd34d;
+            box-shadow: 0 15px 25px rgba(0,0,0,0.1), 0 0 0 10px rgba(255,255,255,0.4);
+            border-radius: 40px;
+        }
+
+        /* เอฟเฟกต์ปุ่ม */
+        .btn-wow {
+            transition: all 0.2s;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.15), 0 -4px 0 rgba(0,0,0,0.1) inset;
+        }
+        .btn-wow:hover { transform: translateY(-3px) scale(1.05); box-shadow: 0 15px 25px rgba(0,0,0,0.2), 0 -4px 0 rgba(0,0,0,0.1) inset; }
+        .btn-wow:active { transform: translateY(2px) scale(0.95); box-shadow: 0 5px 10px rgba(0,0,0,0.2), 0 -2px 0 rgba(0,0,0,0.1) inset; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <!-- หน้าจอเริ่มเกม -->
+    <div id="start-screen" class="overlay-screen">
+        <h1 class="text-5xl md:text-6xl lg:text-7xl font-black text-blue-600 mb-6 text-center drop-shadow-lg leading-tight">
+            🎈 เกม AR ชกลูกโป่ง <br> <span class="text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500">ชนิดของวัสดุ</span>
+        </h1>
+        <p class="text-2xl text-gray-700 mb-10 text-center max-w-2xl px-4 font-semibold">
+            ใช้ <b>"มือ"</b> ชก 🥊 หรือ <b>"คลิก"</b> 🖱️ ที่ลูกโป่ง <br>
+            ที่ตรงกับชนิดของวัสดุให้ถูกต้อง!
+        </p>
+        <button id="btn-start" class="btn-wow bg-gradient-to-r from-green-400 via-emerald-400 to-teal-500 text-white font-black py-4 px-12 rounded-full text-3xl">
+            ✨ เริ่มเกมเลย! (เปิดกล้อง) ✨
+        </button>
+        <p id="loading-text" class="text-emerald-600 font-bold mt-6 hidden animate-bounce">⏳ กำลังโหลดระบบกล้องและเวทมนตร์...</p>
+    </div>
+
+    <!-- วิดีโอพื้นหลัง -->
+    <video id="webcam" autoplay playsinline></video>
+    <div class="bg-pattern"></div>
+
+    <!-- UI เกมเพลย์ -->
+    <div id="game-ui" class="hidden w-full h-full relative z-10 pointer-events-none">
+        <!-- แถบด้านบน -->
+        <div class="absolute top-5 left-5 right-5 flex justify-between items-center bg-white/90 p-4 rounded-3xl shadow-lg pointer-events-none border-2 border-white/50 backdrop-blur-sm">
+            <div class="text-2xl font-black text-pink-500 bg-pink-100 px-4 py-1 rounded-2xl">📝 ข้อ: <span id="q-number">1/10</span></div>
+            <div class="text-3xl font-black text-blue-600 drop-shadow-sm flex items-center gap-2">
+                ⭐ <span id="score" class="text-4xl">0</span>
+            </div>
+            <div class="text-2xl font-black text-red-500 bg-red-100 px-4 py-1 rounded-2xl flex items-center">
+                ⏱️ <span id="time" class="ml-2 w-8 inline-block text-center">60</span>
+            </div>
+        </div>
+
+        <!-- บริเวณแสดงคำถาม -->
+        <div class="absolute top-32 left-1/2 transform -translate-x-1/2 question-box p-8 flex flex-col items-center justify-center pointer-events-none">
+            <div id="question-emoji" class="emoji-img mb-4 bounce-anim">🧴</div>
+            <h2 id="question-text" class="text-4xl md:text-5xl font-black text-gray-800 tracking-wide text-center drop-shadow-sm">ขวดน้ำพลาสติก</h2>
+        </div>
+
+        <!-- คอนเทนเนอร์ใส่ลูกโป่ง -->
+        <div id="balloons-area" class="absolute bottom-0 left-0 w-full h-full pointer-events-none overflow-hidden"></div>
+
+        <!-- ข้อความแจ้งเตือน ถูก/ผิด -->
+        <div id="feedback-msg">ถูกต้อง! +10</div>
+    </div>
+
+    <!-- เคอร์เซอร์มือ -->
+    <div id="hand-cursor">🥊</div>
+
+    <!-- หน้าจอสรุปผล -->
+    <div id="end-screen" class="overlay-screen hidden">
+        <h1 class="text-6xl font-black text-purple-600 mb-6 drop-shadow-lg">🎉 สรุปผลคะแนน 🎉</h1>
+        <div class="bg-white/95 p-10 rounded-[3rem] shadow-2xl text-center mb-10 border-8 border-purple-100">
+            <p class="text-3xl font-bold text-gray-600 mb-4">คะแนนรวมของคุณคือ</p>
+            <p id="final-score" class="text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-600 mb-6 drop-shadow-sm">0</p>
+            <p id="final-correct" class="text-2xl font-bold text-green-500 mb-6 bg-green-50 py-2 px-6 rounded-full inline-block">ตอบถูก 0 จาก 10 ข้อ</p>
+            <p id="final-message" class="text-3xl font-black text-pink-500 block"></p>
+        </div>
+        <button id="btn-restart" class="btn-wow bg-gradient-to-r from-pink-400 to-purple-500 text-white font-black py-4 px-12 rounded-full text-3xl">
+            🔄 เล่นสนุกอีกครั้ง!
+        </button>
+    </div>
+</div>
+
+<script>
+    // --- ระบบสังเคราะห์เสียง (Web Audio API) สุดลื่นไหล ---
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx;
+
+    function initAudio() {
+        if (!audioCtx) audioCtx = new AudioContext();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playSound(type) {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        const now = audioCtx.currentTime;
+        
+        if (type === 'pop') {
+            // เสียงป๊อปลูกโป่ง
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(900, now);
+            osc.frequency.exponentialRampToValueAtTime(300, now + 0.1);
+            gainNode.gain.setValueAtTime(0.5, now);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+            osc.start(now); osc.stop(now + 0.1);
+        } else if (type === 'correct') {
+            // เสียงติ๊งต่อง! (คอร์ดน่ารักๆ)
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(523.25, now); // C5
+            osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+            osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+            gainNode.gain.setValueAtTime(0, now);
+            gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05);
+            gainNode.gain.linearRampToValueAtTime(0, now + 0.5);
+            osc.start(now); osc.stop(now + 0.5);
+        } else if (type === 'wrong') {
+            // เสียงแป่ววว
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(200, now);
+            osc.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+            gainNode.gain.setValueAtTime(0.3, now);
+            gainNode.gain.linearRampToValueAtTime(0.01, now + 0.3);
+            osc.start(now); osc.stop(now + 0.3);
+        }
+    }
+
+    // --- ข้อมูลเกม ---
+    const questionsData = [
+        { name: "ขวดน้ำพลาสติก", emoji: "🧴", material: "พลาสติก" },
+        { name: "ยางลบ", emoji: "🧽", material: "ยาง" },
+        { name: "โต๊ะไม้", emoji: "🪑", material: "ไม้" },
+        { name: "ช้อนโลหะ", emoji: "🥄", material: "โลหะ" },
+        { name: "แก้วน้ำ", emoji: "🥛", material: "แก้ว" },
+        { name: "หนังสือ", emoji: "📕", material: "กระดาษ" },
+        { name: "เสื้อยืด", emoji: "👕", material: "ผ้า" },
+        { name: "ถุงพลาสติก", emoji: "🛍️", material: "พลาสติก" },
+        { name: "ตะปู", emoji: "🔩", material: "โลหะ" },
+        { name: "ผ้าเช็ดหน้า", emoji: "🧣", material: "ผ้า" }
+    ];
+
+    const materialsList = [
+        { text: "พลาสติก", color: "#3b82f6" }, // Blue
+        { text: "ยาง", color: "#ec4899" },    // Pink
+        { text: "ไม้", color: "#d97706" },    // Orange
+        { text: "โลหะ", color: "#64748b" },   // Gray
+        { text: "แก้ว", color: "#06b6d4" },   // Cyan
+        { text: "กระดาษ", color: "#facc15", textColor: "#000" }, // Yellow
+        { text: "ผ้า", color: "#a855f7" }     // Purple
+    ];
+
+    let currentQuestionIndex = 0;
+    let score = 0;
+    let correctCount = 0;
+    let timeLeft = 60;
+    let gameTimer = null;
+    let isPlaying = false;
+    let cameraLoaded = false;
+    let handsLoaded = false;
+
+    // Elements
+    const startScreen = document.getElementById('start-screen');
+    const gameUI = document.getElementById('game-ui');
+    const endScreen = document.getElementById('end-screen');
+    const videoElement = document.getElementById('webcam');
+    const handCursor = document.getElementById('hand-cursor');
+    const balloonsArea = document.getElementById('balloons-area');
+    const feedbackMsg = document.getElementById('feedback-msg');
+    const gameContainer = document.getElementById('game-container');
+
+    const qNumberEl = document.getElementById('q-number');
+    const scoreEl = document.getElementById('score');
+    const timeEl = document.getElementById('time');
+    const qEmojiEl = document.getElementById('question-emoji');
+    const qTextEl = document.getElementById('question-text');
+
+    // AR & MediaPipe
+    let camera = null;
+    let hands = null;
+
+    async function initAR() {
+        initAudio(); // ปลุกระบบเสียงตอนที่ผู้ใช้กดปุ่ม
+        
+        document.getElementById('loading-text').classList.remove('hidden');
+        document.getElementById('btn-start').disabled = true;
+        document.getElementById('btn-start').classList.add('opacity-50');
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+            videoElement.srcObject = stream;
+            cameraLoaded = true;
+
+            hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.75, // ปรับให้แม่นขึ้น
+                minTrackingConfidence: 0.75
+            });
+            hands.onResults(onARResults);
+
+            camera = new Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 1280, height: 720
+            });
+            camera.start();
+            handsLoaded = true;
+            startGame();
+
+        } catch (error) {
+            console.error("Camera Error:", error);
+            // Fallback กรณีไม่มีกล้อง
+            document.getElementById('webcam').style.display = 'none';
+            document.querySelector('.bg-pattern').style.backgroundColor = '#dcfce7';
+            startGame();
+        }
+    }
+
+    // ประมวลผลมือ
+    function onARResults(results) {
+        if (!isPlaying) return;
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            handCursor.style.display = 'block';
+            
+            // ใช้ปลายนิ้วชี้ หรือ สันมือ
+            const landmark = results.multiHandLandmarks[0][8]; 
+            const containerRect = gameContainer.getBoundingClientRect();
+            
+            const x = (1 - landmark.x) * containerRect.width;
+            const y = landmark.y * containerRect.height;
+
+            handCursor.style.left = `${x}px`;
+            handCursor.style.top = `${y}px`;
+
+            checkHandCollision(x, y);
+        } else {
+            handCursor.style.display = 'none';
+        }
+    }
+
+    let hitCooldown = false;
+    function checkHandCollision(x, y) {
+        if (hitCooldown) return;
+
+        handCursor.style.display = 'none'; // หลบเพื่อให้ยิงทะลุ
+        const rect = gameContainer.getBoundingClientRect();
+        const target = document.elementFromPoint(rect.left + x, rect.top + y);
+        handCursor.style.display = 'block';
+
+        if (target && target.classList.contains('balloon-container')) {
+            target.click();
+            hitCooldown = true;
+            setTimeout(() => { hitCooldown = false; }, 400); // ระยะหน่วงการชกรัว
+        }
+    }
+
+    function startGame() {
+        initAudio();
+        startScreen.classList.add('hidden');
+        endScreen.classList.add('hidden');
+        gameUI.classList.remove('hidden');
+
+        currentQuestionIndex = 0;
+        score = 0;
+        correctCount = 0;
+        timeLeft = 60;
+        isPlaying = true;
+        hitCooldown = false;
+        
+        // สลับคำถามแบบสุ่มเพื่อไม่ให้น่าเบื่อ
+        questionsData.sort(() => Math.random() - 0.5);
+
+        scoreEl.innerText = score;
+        timeEl.innerText = timeLeft;
+
+        clearInterval(gameTimer);
+        gameTimer = setInterval(() => {
+            timeLeft--;
+            timeEl.innerText = timeLeft;
+            
+            // กะพริบเวลาสีแดงเมื่อใกล้หมด
+            if (timeLeft <= 10) timeEl.parentElement.classList.add('animate-pulse');
+            else timeEl.parentElement.classList.remove('animate-pulse');
+
+            if (timeLeft <= 0) endGame();
+        }, 1000);
+
+        loadQuestion();
+    }
+
+    function loadQuestion() {
+        if (currentQuestionIndex >= questionsData.length) {
+            endGame();
+            return;
+        }
+
+        const q = questionsData[currentQuestionIndex];
+        qNumberEl.innerText = `${currentQuestionIndex + 1}/${questionsData.length}`;
+        
+        // รีเซ็ตอนิเมชันให้เด้งใหม่
+        qEmojiEl.classList.remove('bounce-anim');
+        void qEmojiEl.offsetWidth; 
+        qEmojiEl.classList.add('bounce-anim');
+        
+        qEmojiEl.innerText = q.emoji;
+        qTextEl.innerText = q.name;
+
+        createBalloons(q.material);
+    }
+
+    function createBalloons(correctMaterial) {
+        balloonsArea.innerHTML = '';
+        
+        // จัดตำแหน่งกระจายให้เต็มจอพอดี (X: 10% ถึง 85%)
+        const positions = [10, 22, 35, 48, 60, 72, 85]; 
+        positions.sort(() => Math.random() - 0.5);
+
+        materialsList.forEach((mat, index) => {
+            const bContainer = document.createElement('div');
+            bContainer.className = 'balloon-container';
+            bContainer.style.left = `${positions[index]}%`;
+            
+            // ระยะเวลาลอย 8-13 วิ (เร็วขึ้นนิดนึงให้สนุก)
+            const duration = 8 + Math.random() * 5; 
+            const delay = Math.random() * 1.5;
+            bContainer.style.animation = `floatUp ${duration}s ease-in-out ${delay}s infinite`;
+
+            const b = document.createElement('div');
+            b.className = 'balloon';
+            b.style.backgroundColor = mat.color;
+            b.style.color = mat.textColor || 'white';
+            b.innerText = mat.text;
+            
+            // เพิ่มจุกและเชือก
+            const knot = document.createElement('div');
+            knot.className = 'balloon-knot';
+            knot.style.borderBottomColor = mat.color;
+            const string = document.createElement('div');
+            string.className = 'balloon-string';
+
+            b.appendChild(knot);
+            b.appendChild(string);
+            bContainer.appendChild(b);
+            
+            bContainer.onclick = (e) => {
+                if (!isPlaying) return;
+                handleAnswer(mat.text, correctMaterial, bContainer, mat.color, e);
+            };
+
+            balloonsArea.appendChild(bContainer);
+        });
+    }
+
+    function handleAnswer(selectedMaterial, correctMaterial, element, balloonColor, event) {
+        if (selectedMaterial === correctMaterial) {
+            // --- ตอบถูก ---
+            score += 10;
+            correctCount++;
+            scoreEl.innerText = score;
+            
+            // อนิเมชันลูกโป่งแตก (ย่อส่วนแล้วจาง)
+            playSound('pop');
+            element.style.transform = 'scale(0)';
+            element.style.opacity = '0';
+            
+            // มินิพลุออกมาจากตัวลูกโป่ง!
+            const rect = element.getBoundingClientRect();
+            const x = (rect.left + rect.width / 2) / window.innerWidth;
+            const y = (rect.top + rect.height / 2) / window.innerHeight;
+            triggerMiniConfetti(x, y, balloonColor);
+            
+            setTimeout(() => playSound('correct'), 200);
+
+            showFeedback('✨ ถูกต้อง! +10 ✨', 'text-green-500');
+            
+            // เปลี่ยนข้อสมูทๆ
+            setTimeout(() => {
+                balloonsArea.innerHTML = '';
+                currentQuestionIndex++;
+                loadQuestion();
+            }, 600);
+
+        } else {
+            // --- ตอบผิด ---
+            playSound('wrong');
+            element.classList.add('shake');
+            setTimeout(() => element.classList.remove('shake'), 400);
+            
+            showFeedback('❌ ยังไม่ถูกนะ!', 'text-red-500');
+        }
+    }
+
+    function showFeedback(text, colorClass) {
+        feedbackMsg.innerText = text;
+        feedbackMsg.className = colorClass;
+        feedbackMsg.classList.add('show-feedback');
+        
+        setTimeout(() => {
+            feedbackMsg.classList.remove('show-feedback');
+        }, 1200);
+    }
+
+    // พลุเล็กๆ แตกตรงตำแหน่งลูกโป่ง
+    function triggerMiniConfetti(x, y, color) {
+        confetti({
+            particleCount: 25,
+            spread: 50,
+            origin: { x: x, y: y },
+            colors: [color, '#ffffff', '#ffd700'],
+            ticks: 50,
+            gravity: 0.8,
+            scalar: 0.8,
+            zIndex: 100
+        });
+    }
+    
+    // พลุใหญ่อลังการตอนจบเกม
+    function triggerGrandConfetti() {
+        const duration = 3000;
+        const end = Date.now() + duration;
+        (function frame() {
+            confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors: ['#ff0000','#00ff00','#0000ff'] });
+            confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors: ['#ff0000','#00ff00','#0000ff'] });
+            if (Date.now() < end) requestAnimationFrame(frame);
+        }());
+    }
+
+    function endGame() {
+        isPlaying = false;
+        clearInterval(gameTimer);
+        timeEl.parentElement.classList.remove('animate-pulse');
+        
+        gameUI.classList.add('hidden');
+        endScreen.classList.remove('hidden');
+        handCursor.style.display = 'none';
+
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('final-correct').innerText = `✅ ตอบถูก ${correctCount} จาก ${questionsData.length} ข้อ`;
+
+        let msg = "";
+        if (score >= 80) {
+            msg = "🏆 ยอดเยี่ยมมาก นักวิทยาศาสตร์น้อย! 🏆";
+            triggerGrandConfetti();
+            playSound('correct');
+        }
+        else if (score >= 50) {
+            msg = "👍 เก่งมาก พยายามอีกนิดนะ! 👍";
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        }
+        else {
+            msg = "💪 ไม่เป็นไร ลองเล่นใหม่อีกครั้งนะ! 💪";
+        }
+        
+        document.getElementById('final-message').innerText = msg;
+    }
+
+    document.getElementById('btn-start').addEventListener('click', () => {
+        if (!cameraLoaded && !handsLoaded) initAR();
+        else startGame();
+    });
+
+    document.getElementById('btn-restart').addEventListener('click', () => {
+        startGame();
+    });
+
+</script>
+</body>
+</html>
